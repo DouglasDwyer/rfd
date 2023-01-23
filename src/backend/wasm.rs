@@ -1,19 +1,13 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::Element;
 
-use web_sys::{HtmlButtonElement, HtmlInputElement};
+use web_sys::HtmlInputElement;
 
 use crate::file_dialog::FileDialog;
 use crate::FileHandle;
 
 pub struct WasmDialog {
-    overlay: Element,
-    card: Element,
     input: HtmlInputElement,
-    button: HtmlButtonElement,
-
-    style: Element,
 }
 
 impl WasmDialog {
@@ -21,82 +15,55 @@ impl WasmDialog {
         let window = web_sys::window().expect("Window not found");
         let document = window.document().expect("Document not found");
 
-        let overlay = document.create_element("div").unwrap();
-        overlay.set_id("rfd-overlay");
+        let input_el = document.create_element("input").unwrap();
+        let input: HtmlInputElement = wasm_bindgen::JsCast::dyn_into(input_el).unwrap();
 
-        let card = {
-            let card = document.create_element("div").unwrap();
-            card.set_id("rfd-card");
-            overlay.append_child(&card).unwrap();
+        input.set_id("rfd-input");
+        input.set_type("file");
 
-            card
-        };
+        let mut accept: Vec<String> = Vec::new();
 
-        let input = {
-            let input_el = document.create_element("input").unwrap();
-            let input: HtmlInputElement = wasm_bindgen::JsCast::dyn_into(input_el).unwrap();
+        for filter in opt.filters.iter() {
+            accept.append(&mut filter.extensions.to_vec());
+        }
 
-            input.set_id("rfd-input");
-            input.set_type("file");
+        accept.iter_mut().for_each(|ext| ext.insert_str(0, "."));
 
-            let mut accept: Vec<String> = Vec::new();
-
-            for filter in opt.filters.iter() {
-                accept.append(&mut filter.extensions.to_vec());
-            }
-
-            accept.iter_mut().for_each(|ext| ext.insert_str(0, "."));
-
-            input.set_accept(&accept.join(","));
-
-            card.append_child(&input).unwrap();
-            input
-        };
-
-        let button = {
-            let btn_el = document.create_element("button").unwrap();
-            let btn: HtmlButtonElement = wasm_bindgen::JsCast::dyn_into(btn_el).unwrap();
-
-            btn.set_id("rfd-button");
-            btn.set_inner_text("Ok");
-
-            card.append_child(&btn).unwrap();
-            btn
-        };
-
-        let style = document.create_element("style").unwrap();
-        style.set_inner_html(include_str!("./wasm/style.css"));
-        overlay.append_child(&style).unwrap();
+        input.set_accept(&accept.join(","));
 
         Self {
-            overlay,
-            card,
-            button,
-            input,
-
-            style,
+            input
         }
     }
 
     async fn show(&self) {
         let window = web_sys::window().expect("Window not found");
-        let document = window.document().expect("Document not found");
-        let body = document.body().expect("document should have a body");
+        let body = window.document().and_then(|x| x.body()).expect("Document body not found");
+        self.input.focus().unwrap();
+        self.input.click();
+        let mut cloned_closure = Closure::wrap(Box::new(|| ()) as Box<dyn FnMut()>);
+        let promise = js_sys::Promise::new(&mut |res, _rej| {
+            let body_clone = body.clone();
+            let cl = self.input.clone();
+            let closure = Closure::once(Box::new(move || {
+                let cloned_closure2 = std::sync::Arc::new(std::cell::Cell::<Option<Closure<dyn FnMut()>>>::new(None));
+                let cloned_closure22 = cloned_closure2.clone();
+                let body_clone2 = body_clone.clone();
+                let closure2 = Closure::once(Box::new(move || {
+                    res.call0(&JsValue::undefined()).unwrap();
+                    drop(body_clone2.remove_event_listener_with_callback("mousemove", cloned_closure22.replace(None).unwrap().as_ref().unchecked_ref()));
+                }) as Box<dyn FnOnce()>);
+                drop(cl.set_oninput(Some(closure2.as_ref().unchecked_ref())));
+                drop(body_clone.add_event_listener_with_callback("mousemove", closure2.as_ref().unchecked_ref()));
+                cloned_closure2.set(Some(closure2));
+            }) as Box<dyn FnOnce()>);
 
-        let overlay = self.overlay.clone();
-        let button = self.button.clone();
-
-        let promise = js_sys::Promise::new(&mut move |res, _rej| {
-            let closure = Closure::wrap(Box::new(move || {
-                res.call0(&JsValue::undefined()).unwrap();
-            }) as Box<dyn FnMut()>);
-
-            button.set_onclick(Some(closure.as_ref().unchecked_ref()));
-            closure.forget();
-            body.append_child(&overlay).ok();
+            drop(window.add_event_listener_with_callback("focus", closure.as_ref().unchecked_ref()));
+            cloned_closure = closure;
         });
         let future = wasm_bindgen_futures::JsFuture::from(promise);
         future.await.unwrap();
+        drop(window.remove_event_listener_with_callback("focus", cloned_closure.as_ref().unchecked_ref()));
     }
 
     fn get_results(&self) -> Option<Vec<FileHandle>> {
@@ -141,12 +108,7 @@ impl WasmDialog {
 
 impl Drop for WasmDialog {
     fn drop(&mut self) {
-        self.button.remove();
         self.input.remove();
-        self.card.remove();
-
-        self.style.remove();
-        self.overlay.remove();
     }
 }
 
