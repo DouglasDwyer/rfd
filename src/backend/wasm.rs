@@ -5,7 +5,7 @@ use crate::{
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::{Element, HtmlAnchorElement, HtmlButtonElement, HtmlElement, HtmlInputElement};
+use web_sys::{Element, HtmlAnchorElement, HtmlInputElement};
 
 #[derive(Clone, Debug)]
 pub enum FileKind<'a> {
@@ -24,45 +24,13 @@ enum HtmlIoElement<'a> {
 }
 
 pub struct WasmDialog<'a> {
-    overlay: Element,
-    card: Element,
-    title: Option<HtmlElement>,
     io: HtmlIoElement<'a>,
-    button: HtmlButtonElement,
-
-    style: Element,
 }
 
 impl<'a> WasmDialog<'a> {
     pub fn new(opt: &FileKind<'a>) -> Self {
         let window = web_sys::window().expect("Window not found");
         let document = window.document().expect("Document not found");
-
-        let overlay = document.create_element("div").unwrap();
-        overlay.set_id("rfd-overlay");
-
-        let card = {
-            let card = document.create_element("div").unwrap();
-            card.set_id("rfd-card");
-            overlay.append_child(&card).unwrap();
-
-            card
-        };
-
-        let title = match opt {
-            FileKind::In(dialog) => &dialog.title,
-            FileKind::Out(dialog, _) => &dialog.title,
-        }
-        .as_ref()
-        .map(|title| {
-            let title_el: HtmlElement = document.create_element("div").unwrap().dyn_into().unwrap();
-
-            title_el.set_id("rfd-title");
-            title_el.set_inner_html(title);
-
-            card.append_child(&title_el).unwrap();
-            title_el
-        });
 
         let io = match opt {
             FileKind::In(dialog) => {
@@ -81,8 +49,6 @@ impl<'a> WasmDialog<'a> {
                 accept.iter_mut().for_each(|ext| ext.insert_str(0, "."));
 
                 input.set_accept(&accept.join(","));
-
-                card.append_child(&input).unwrap();
                 HtmlIoElement::Input(input)
             }
             FileKind::Out(dialog, data) => {
@@ -92,7 +58,6 @@ impl<'a> WasmDialog<'a> {
                 output.set_id("rfd-output");
                 output.set_inner_text("click here to download your file");
 
-                card.append_child(&output).unwrap();
                 HtmlIoElement::Output {
                     element: output,
                     name: dialog.file_name.clone().unwrap_or_default(),
@@ -100,50 +65,23 @@ impl<'a> WasmDialog<'a> {
                 }
             }
         };
-
-        let button = {
-            let btn_el = document.create_element("button").unwrap();
-            let btn: HtmlButtonElement = wasm_bindgen::JsCast::dyn_into(btn_el).unwrap();
-
-            btn.set_id("rfd-button");
-            btn.set_inner_text("Ok");
-
-            card.append_child(&btn).unwrap();
-            btn
-        };
-
-        let style = document.create_element("style").unwrap();
-        style.set_inner_html(include_str!("./wasm/style.css"));
-        overlay.append_child(&style).unwrap();
-
+        
         Self {
-            overlay,
-            card,
-            title,
-            button,
-            io,
-
-            style,
+            io
         }
     }
 
     async fn show(&self) {
-        let window = web_sys::window().expect("Window not found");
-        let document = window.document().expect("Document not found");
-        let body = document.body().expect("Document should have a body");
-
-        let overlay = self.overlay.clone();
-        let button = self.button.clone();
-
         let promise = match &self.io {
-            HtmlIoElement::Input(_) => js_sys::Promise::new(&mut move |res, _rej| {
+            HtmlIoElement::Input(el) => js_sys::Promise::new(&mut move |res, _rej| {
                 let resolve_promise = Closure::wrap(Box::new(move || {
                     res.call0(&JsValue::undefined()).unwrap();
                 }) as Box<dyn FnMut()>);
 
-                button.set_onclick(Some(resolve_promise.as_ref().unchecked_ref()));
+                let _ = el.set_oninput(Some(resolve_promise.as_ref().unchecked_ref()));
+                el.focus().unwrap();
+                el.click();
                 resolve_promise.forget();
-                body.append_child(&overlay).ok();
             }),
             HtmlIoElement::Output {
                 element,
@@ -162,7 +100,6 @@ impl<'a> WasmDialog<'a> {
 
                     // Resolve the promise once the user clicks the download link or the button.
                     output.set_onclick(Some(resolve_promise.as_ref().unchecked_ref()));
-                    button.set_onclick(Some(resolve_promise.as_ref().unchecked_ref()));
                     resolve_promise.forget();
 
                     let set_download_link = move |in_array: &[u8], name: &str| {
@@ -186,8 +123,8 @@ impl<'a> WasmDialog<'a> {
                     };
 
                     set_download_link(&*data, &file_name);
-
-                    body.append_child(&overlay).ok();
+                    element.focus().unwrap();
+                    element.click();
                 })
             }
         };
@@ -257,13 +194,7 @@ impl<'a> WasmDialog<'a> {
 
 impl<'a> Drop for WasmDialog<'a> {
     fn drop(&mut self) {
-        self.button.remove();
         self.io_element().remove();
-        self.title.as_ref().map(|elem| elem.remove());
-        self.card.remove();
-
-        self.style.remove();
-        self.overlay.remove();
     }
 }
 
